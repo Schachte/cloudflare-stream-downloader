@@ -23,10 +23,12 @@ import (
 )
 
 const (
-	OPTION_DOWNLOAD         = "Download video and segments"
-	OPTION_LIST_RESOLUTIONS = "List available resolutions"
-	OPTION_COUNT_SEGMENTS   = "Count number of segments"
-	OPTION_EXIT             = "🚫 Exit"
+	OPTION_DOWNLOAD            = "Download video and segments"
+	OPTION_LIST_RESOLUTIONS    = "List available resolutions"
+	OPTION_COUNT_SEGMENTS      = "Count number of segments"
+	OPTION_OUTPUT_MANIFEST_URL = "Output m3u8 manifest URL for a specific resolution"
+	OPTION_CHANGE_MANIFEST_URL = "Update manifest URL"
+	OPTION_EXIT                = "🚫 Exit"
 )
 
 type Video struct {
@@ -47,7 +49,14 @@ func main() {
 	for {
 		prompt := promptui.Select{
 			Label: "Cloudflare Stream Downloader",
-			Items: []string{OPTION_DOWNLOAD, OPTION_LIST_RESOLUTIONS, OPTION_COUNT_SEGMENTS, OPTION_EXIT},
+			Items: []string{
+				OPTION_DOWNLOAD,
+				OPTION_OUTPUT_MANIFEST_URL,
+				OPTION_CHANGE_MANIFEST_URL,
+				OPTION_LIST_RESOLUTIONS,
+				OPTION_COUNT_SEGMENTS,
+				OPTION_EXIT,
+			},
 		}
 
 		_, result, err := prompt.Run()
@@ -58,10 +67,17 @@ func main() {
 		switch result {
 		case OPTION_DOWNLOAD:
 			initializeVideoDownloadProcess(manifestURL)
+		case OPTION_OUTPUT_MANIFEST_URL:
+			outputManifestURL(manifestURL)
 		case OPTION_LIST_RESOLUTIONS:
 			listAvailableResolutions(manifestURL)
 		case OPTION_COUNT_SEGMENTS:
 			countTotalSegments(manifestURL)
+		case OPTION_CHANGE_MANIFEST_URL:
+			fmt.Print("Enter new m3u8 manifest URL: ")
+			var userInput string
+			fmt.Scanln(&userInput)
+			manifestURL = userInput
 		case OPTION_EXIT:
 			fmt.Println("👋 Exiting Stream downloader")
 			os.Exit(1)
@@ -69,6 +85,43 @@ func main() {
 			fmt.Println("Option not available")
 		}
 	}
+}
+
+// outputManifestURL will output the m3u8 manifest URL for a specific video resolution
+func outputManifestURL(manifestURL string) {
+	baseURL, UID, err := extractUIDAndPrefixURL(manifestURL)
+	if err != nil {
+		log.Fatalf("there was a problem parsing the base url: %v", err)
+	}
+
+	video := Video{
+		MasterManifestURL: manifestURL,
+		BaseURL:           baseURL,
+		VideoUID:          UID,
+	}
+
+	masterPlaylist, err := video.retrieveMasterPlaylist(manifestURL)
+	if err != nil {
+		log.Fatalf("there was a problem retrieving master playlist: %v", err)
+	}
+	video.MasterPlaylist = *masterPlaylist
+
+	chosenManifest, _, err := video.printResolutionDownloadMenu()
+	if err != nil {
+		log.Fatalf("there was a problem selecting a download option: %v", err)
+	}
+
+	fmt.Println(chosenManifest)
+
+	// segmentPaths, err := video.downloadSegmentsFromManifest(chosenManifest, chosenResolution, true)
+	// if err != nil {
+	// 	log.Fatalf("there was a problem downloading the segments: %v", err)
+	// }
+
+	// fmt.Printf("There are a total of %d segments on the %s manifest\n",
+	// 	len(segmentPaths),
+	// 	chosenResolution,
+	// )
 }
 
 // countTotalSegments will output the number of segments on a particular manifest

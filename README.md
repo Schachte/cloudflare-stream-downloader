@@ -7,9 +7,14 @@ Utility to download MP4 videos and individual [MPEG-TS](https://en.wikipedia.org
 - ✅ List available resolutions
 - ✅ Count number of segments
 
+## Installation
+```
+go get github.com/Schachte/cloudflare-stream-downloader
+```
+
 ## Usage
 ```sh
-./stream-download <HLS_MANIFEST_URL>
+cloudflare-stream-downloader <HLS_MANIFEST_URL> 
 ```
 
 For building the binary, see section below on `Builds & Releases` or [download latest release here.](https://github.com/Schachte/cloudflare-stream-downloader/releases)
@@ -20,7 +25,7 @@ You can grab the HLS manifest from the Cloudflare Dash as shown in the image bel
 
 ## Example Output
 ```
-./stream-download https://.../manifest/video.m3u8
+cloudflare-stream-downloader https://.../manifest/video.m3u8
 
 Use the arrow keys to navigate: ↓ ↑ → ←
 ? Cloudflare Stream Downloader::
