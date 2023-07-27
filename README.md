@@ -9,7 +9,7 @@
 ./stream-download <HLS_MANIFEST_URL>
 ```
 
-For building the binary, see section below on `Builds & Releases` or just download from the sidebar under releases for your OS.
+For building the binary, see section below on `Builds & Releases` or [download latest release here.](https://github.com/Schachte/cloudflare-stream-downloader/releases)
 
 You can grab the HLS manifest from the Cloudflare Dash as shown in the image below:
 
@@ -48,13 +48,18 @@ Output [segments] will be in the directory
 ./123456/640x360/segments/
 ```
 
+## Builds & Releases
+
+### Releases 
+
+[Download latest release here.](https://github.com/Schachte/cloudflare-stream-downloader/releases)
+
+or 
+
+You can also run the latest builds for all operating systems by running: `make all`. 
+
 ## Playback
 
 ```
 ffplay <UID>/<RESOLUTION>/<UID>.mp4
 ```
-
-## Builds & Releases
-
-You can download the latest release in the sidebar of this repository.
-You can also run the latest builds for all operating systems by running: `make all`. The output binaries will exist at the root.
