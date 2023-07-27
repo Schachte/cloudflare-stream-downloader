@@ -17,37 +17,44 @@ You can grab the HLS manifest from the Cloudflare Dash as shown in the image bel
 
 ## Example Output
 ```
-./stream-download 123456
+./stream-download https://.../manifest/video.m3u8
 
-Listing all available resolutions for video UID: 123456
+Use the arrow keys to navigate: ↓ ↑ → ←
+? Cloudflare Stream Downloader::
+  ▸ Download video and segments
+    List available resolutions
+    Count number of segments
+    🚫 Exit
 
-0) 854x480
-1) 1920x1080
-2) 1280x720
-3) 640x360
-4) 426x240
-5) Exit
+✔ Download video and segments
+📋 Listing all available resolutions for video UID: f92743594bb2d9471c8ef80b9437c1ff
 
----------------------------------------------
+0) 766x360
+1) 510x240
+2) 🚫 Exit
 
-Select which resolution you'd like to download: 3
-
----------------------------------------------
-Beginning download for: 640x360
-Starting download...
-5% complete
+📼 Select resolution: 0
+🌱 Beginning download for [766x360]
 10% complete
-...
-100% complete
-
----------------------------------------------
+20% complete
+30% complete
+40% complete
+50% complete
+60% complete
+70% complete
+80% complete
+90% complete
 Complete!
 ---------------------------------------------
-Output [video] will be in the directory
-./123456/640x360/123456.mp4
+Video output:
+./f92743594bb2d9471c8ef80b9437c1ff/766x360/f92743594bb2d9471c8ef80b9437c1ff.mp4
 
-Output [segments] will be in the directory
-./123456/640x360/segments/
+Segments output:
+./f92743594bb2d9471c8ef80b9437c1ff/766x360/segments/
+
+Playback:
+ffplay ./f92743594bb2d9471c8ef80b9437c1ff/766x360/f92743594bb2d9471c8ef80b9437c1ff.mp4
+---------------------------------------------
 ```
 
 ## Builds & Releases
@@ -59,9 +66,3 @@ Output [segments] will be in the directory
 or 
 
 You can also run the latest builds for all operating systems by running: `make all`. 
-
-## Playback
-
-```
-ffplay <UID>/<RESOLUTION>/<UID>.mp4
-```

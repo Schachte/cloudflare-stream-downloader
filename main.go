@@ -19,51 +19,160 @@ import (
 	"strings"
 
 	"github.com/grafov/m3u8"
+	"github.com/manifoldco/promptui"
 )
+
+const (
+	OPTION_DOWNLOAD         = "Download video and segments"
+	OPTION_LIST_RESOLUTIONS = "List available resolutions"
+	OPTION_COUNT_SEGMENTS   = "Count number of segments"
+	OPTION_EXIT             = "🚫 Exit"
+)
+
+type Video struct {
+	BaseURL            string
+	MasterManifestURL  string
+	VideoUID           string
+	RenditionManifests map[string]string
+
+	MasterPlaylist m3u8.MasterPlaylist
+}
 
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Please provide an HLS manifest URL as the first argument.")
 		return
 	}
-
 	manifestURL := os.Args[1]
-	chosenManifestURL, resolution, err := downloadAndParse(manifestURL)
-	if err != nil {
-		log.Fatalf("there was a problem downloading the manifest: %v", err)
-	}
+	for {
+		prompt := promptui.Select{
+			Label: "Cloudflare Stream Downloader:",
+			Items: []string{OPTION_DOWNLOAD, OPTION_LIST_RESOLUTIONS, OPTION_COUNT_SEGMENTS, OPTION_EXIT},
+		}
 
-	prefixURL, UID, err := extractUIDAndPrefixURL(manifestURL)
+		_, result, err := prompt.Run()
+		if err != nil {
+			log.Fatal("Unable to process selection")
+		}
+
+		switch result {
+		case OPTION_DOWNLOAD:
+			initializeVideoDownloadProcess(manifestURL)
+		case OPTION_LIST_RESOLUTIONS:
+			listAvailableResolutions(manifestURL)
+		case OPTION_COUNT_SEGMENTS:
+			countTotalSegments(manifestURL)
+		case OPTION_EXIT:
+			fmt.Println("👋 Exiting Stream downloader")
+			os.Exit(1)
+		default:
+			fmt.Println("Option not available")
+		}
+	}
+}
+
+// countTotalSegments will output the number of segments on a particular manifest
+func countTotalSegments(manifestURL string) {
+	baseURL, UID, err := extractUIDAndPrefixURL(manifestURL)
 	if err != nil {
 		log.Fatalf("there was a problem parsing the base url: %v", err)
 	}
 
-	fmt.Println("Starting download...")
+	video := Video{
+		MasterManifestURL: manifestURL,
+		BaseURL:           baseURL,
+		VideoUID:          UID,
+	}
 
-	segmentPaths, err := downloadSegmentsFromManifest(chosenManifestURL, prefixURL, UID, resolution)
+	masterPlaylist, err := video.retrieveMasterPlaylist(manifestURL)
+	if err != nil {
+		log.Fatalf("there was a problem retrieving master playlist: %v", err)
+	}
+	video.MasterPlaylist = *masterPlaylist
+
+	chosenManifest, chosenResolution, err := video.printResolutionDownloadMenu()
+	if err != nil {
+		log.Fatalf("there was a problem selecting a download option: %v", err)
+	}
+
+	segmentPaths, err := video.downloadSegmentsFromManifest(chosenManifest, chosenResolution, true)
 	if err != nil {
 		log.Fatalf("there was a problem downloading the segments: %v", err)
 	}
 
-	err = concatenateTSFiles(
-		segmentPaths,
-		fmt.Sprintf("%s/%s", UID, resolution),
-		fmt.Sprintf("%s.mp4", UID),
+	fmt.Printf("There are a total of %d segments on the %s manifest\n",
+		len(segmentPaths),
+		chosenResolution,
 	)
+}
+
+// listAvailableResolutions outputs all available resolutions from a manifest
+func listAvailableResolutions(manifestURL string) {
+	baseURL, UID, err := extractUIDAndPrefixURL(manifestURL)
+	if err != nil {
+		log.Fatalf("there was a problem parsing the base url: %v", err)
+	}
+
+	video := Video{
+		MasterManifestURL: manifestURL,
+		BaseURL:           baseURL,
+		VideoUID:          UID,
+	}
+
+	masterPlaylist, err := video.retrieveMasterPlaylist(manifestURL)
+	if err != nil {
+		log.Fatalf("there was a problem retrieving master playlist: %v", err)
+	}
+
+	video.MasterPlaylist = *masterPlaylist
+	_, _, err = video.printResolutionDownloadMenu()
+	if err != nil {
+		log.Fatalf("there was a problem selecting a download option: %v", err)
+	}
+}
+
+// initializeVideoDownloadProcess will invoke the download job to pull
+// all segments and final mp4 video onto disk
+func initializeVideoDownloadProcess(manifestURL string) {
+	baseURL, UID, err := extractUIDAndPrefixURL(manifestURL)
+	if err != nil {
+		log.Fatalf("there was a problem parsing the base url: %v", err)
+	}
+
+	video := Video{
+		MasterManifestURL: manifestURL,
+		BaseURL:           baseURL,
+		VideoUID:          UID,
+	}
+
+	masterPlaylist, err := video.retrieveMasterPlaylist(manifestURL)
+	if err != nil {
+		log.Fatalf("there was a problem retrieving master playlist: %v", err)
+	}
+	video.MasterPlaylist = *masterPlaylist
+
+	chosenManifest, chosenResolution, err := video.printResolutionDownloadMenu()
+	if err != nil {
+		log.Fatalf("there was a problem selecting a download option: %v", err)
+	}
+
+	segmentPaths, err := video.downloadSegmentsFromManifest(chosenManifest, chosenResolution, false)
+	if err != nil {
+		log.Fatalf("there was a problem downloading the segments: %v", err)
+	}
+
+	err = video.concatenateTSFiles(segmentPaths, chosenResolution)
 	if err != nil {
 		log.Fatalf("there was a problem concatenating the segments: %v", err)
 	}
 
-	fmt.Println("Complete!")
-	fmt.Println("---------------------------------------------")
-	fmt.Printf("Output [video] will be in the directory\n./%s/%s/%s.mp4\n\n", UID, resolution, UID)
-	fmt.Printf("Output [segments] will be in the directory\n./%s/%s/segments/\n", UID, resolution)
-	fmt.Println("---------------------------------------------")
+	video.renderOutputPaths(chosenResolution)
 }
 
 // downloadSegmentsFromManifest will download a complete video and individual segments
 // from a particular manifest and returns the list of relative segment paths
-func downloadSegmentsFromManifest(manifestURL, baseURL, UID, resolution string) ([]string, error) {
+func (v *Video) downloadSegmentsFromManifest(manifestURL, resolution string, skipDownload bool) ([]string, error) {
+	fmt.Printf("🌱 Beginning download for [%s]\n", resolution)
 	resp, err := http.Get(manifestURL)
 	if err != nil {
 		return nil, err
@@ -93,26 +202,30 @@ func downloadSegmentsFromManifest(manifestURL, baseURL, UID, resolution string) 
 				for strings.HasPrefix(segmentURL, "../") {
 					segmentURL = strings.TrimPrefix(segmentURL, "../")
 				}
-				completeSegmentURL := fmt.Sprintf("%s/%s", baseURL, segmentURL)
+				completeSegmentURL := fmt.Sprintf("%s/%s", v.BaseURL, segmentURL)
 				segmentName, err := getSegmentName(completeSegmentURL)
 				if err != nil {
 					return nil, err
 				}
-				localSegmentPath := fmt.Sprintf("%s/%s/segments/%s", UID, resolution, segmentName)
+				localSegmentPath := fmt.Sprintf("%s/%s/segments/%s", v.VideoUID, resolution, segmentName)
 				localSegmentPaths = append(localSegmentPaths, localSegmentPath)
-				err = downloadFile(completeSegmentURL, localSegmentPath)
-				if err != nil {
-					return nil, err
+				if !skipDownload {
+					err = downloadFile(completeSegmentURL, localSegmentPath)
+					if err != nil {
+						return nil, err
+					}
 				}
 			}
 
-			// user-friendly progress output
-			prog := int((float32(idx) / float32(totalSegments)) * 100)
-			if prog%5 == 0 && prog != lastReportedProgress {
-				msg := fmt.Sprintf("%d%% complete\n", prog)
-				fmt.Fprint(writer, msg)
-				writer.Flush()
-				lastReportedProgress = prog
+			if !skipDownload {
+				// user-friendly progress output
+				prog := int((float32(idx) / float32(totalSegments)) * 100)
+				if prog%10 == 0 && prog != lastReportedProgress {
+					msg := fmt.Sprintf("%d%% complete\n", prog)
+					fmt.Fprint(writer, msg)
+					writer.Flush()
+					lastReportedProgress = prog
+				}
 			}
 		}
 	}
@@ -133,70 +246,27 @@ func extractUIDAndPrefixURL(url string) (baseURL, uid string, err error) {
 	return "", "", errors.New("invalid input")
 }
 
-// downloadAndParse will allow the user to select a resolution to download and return
-// the resultant manifest URL for that resolution
-func downloadAndParse(url string) (resManifest, resolution string, err error) {
-	baseURL, UID, err := extractUIDAndPrefixURL(url)
-	if err != nil {
-		return "", "", err
-	}
+// retrieveMasterPlaylist gets the master m3u8
+func (v *Video) retrieveMasterPlaylist(url string) (*m3u8.MasterPlaylist, error) {
 	resp, err := http.Get(url)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 
 	dataBuf := bytes.NewBuffer(body)
 	playlist, _, err := m3u8.Decode(*dataBuf, false)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 
 	masterPlaylist := playlist.(*m3u8.MasterPlaylist)
-	resolutionURLs := make(map[string]string)
-
-	fmt.Printf("Listing all available resolutions for video UID: %s\n\n", UID)
-	var userOption int
-	manifestURLIdx := []string{}
-	resolutionIdx := []string{}
-
-	for idx, variant := range masterPlaylist.Variants {
-		manifestForResolution := fmt.Sprintf("%s/%s/manifest/%s", baseURL, UID, variant.URI)
-		resolutionURLs[variant.Resolution] = manifestForResolution
-		manifestURLIdx = append(manifestURLIdx, manifestForResolution)
-		resolutionIdx = append(resolutionIdx, variant.Resolution)
-		fmt.Printf("%d) %s\n", idx, variant.Resolution)
-	}
-
-	fmt.Printf("%d) Exit\n", len(manifestURLIdx))
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Print("\nSelect which resolution you'd like to download: ")
-	input, err := reader.ReadString('\n')
-	if err != nil {
-		fmt.Println("Error reading input:", err)
-		return "", "", err
-	}
-
-	userOption, err = strconv.Atoi(input[:len(input)-1])
-	if err != nil {
-		fmt.Println("Error converting input to integer:", err)
-		return "", "", err
-	}
-
-	if userOption == len(manifestURLIdx) {
-		fmt.Println("Exiting Stream downloader")
-		os.Exit(1)
-	}
-
-	chosenResolution := resolutionIdx[userOption]
-	fmt.Printf("Beginning download for: %s\n", chosenResolution)
-
-	return resolutionURLs[chosenResolution], chosenResolution, nil
+	return masterPlaylist, nil
 }
 
 // downloadFile will take a URL and download it to a predfined location
@@ -240,7 +310,9 @@ func getSegmentName(urlStr string) (string, error) {
 
 // concatenateTSFiles take all downloaded segments and concat into single, playable
 // mp4 using ffmpeg
-func concatenateTSFiles(tsFiles []string, outputDir, outputFilename string) error {
+func (v *Video) concatenateTSFiles(tsFiles []string, chosenResolution string) error {
+	outputDir := fmt.Sprintf("%s/%s", v.VideoUID, chosenResolution)
+	outputFilename := fmt.Sprintf("%s.mp4", v.VideoUID)
 	tempFile, err := os.CreateTemp("", "tslist-*.txt")
 	if err != nil {
 		return err
@@ -266,11 +338,62 @@ func concatenateTSFiles(tsFiles []string, outputDir, outputFilename string) erro
 	}
 
 	outputPath := path.Join(outputDir, outputFilename)
-	cmd := exec.Command("ffmpeg", "-f", "concat", "-safe", "0", "-i", tempFile.Name(), "-c", "copy", outputPath)
+	cmd := exec.Command("ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", tempFile.Name(), "-c", "copy", outputPath)
+
 	err = cmd.Run()
 	if err != nil {
 		return fmt.Errorf("ffmpeg error: %w", err)
 	}
-
 	return nil
+}
+
+// printResolutionDownloadMenu lists available options to pull segments
+// from an available resolution
+func (v *Video) printResolutionDownloadMenu() (string, string, error) {
+	var userOption int
+	var manifestURLIdx []string
+	var resolutionIdx []string
+
+	reader := bufio.NewReader(os.Stdin)
+	resolutionURLs := make(map[string]string)
+
+	fmt.Printf("📋 Listing all available resolutions for video UID: %s\n\n", v.VideoUID)
+	for idx, variant := range v.MasterPlaylist.Variants {
+		manifestForResolution := fmt.Sprintf("%s/%s/manifest/%s", v.BaseURL, v.VideoUID, variant.URI)
+		resolutionURLs[variant.Resolution] = manifestForResolution
+		manifestURLIdx = append(manifestURLIdx, manifestForResolution)
+		resolutionIdx = append(resolutionIdx, variant.Resolution)
+		fmt.Printf("%d) %s\n", idx, variant.Resolution)
+	}
+
+	fmt.Printf("%d) 🚫 Exit\n", len(manifestURLIdx))
+	fmt.Print("\n📼 Select resolution: ")
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Println("Error reading input:", err)
+		return "", "", err
+	}
+
+	userOption, err = strconv.Atoi(input[:len(input)-1])
+	if err != nil {
+		fmt.Println("Error converting input to integer:", err)
+		return "", "", err
+	}
+
+	if userOption == len(manifestURLIdx) {
+		fmt.Println("👋 Exiting Stream downloader")
+		os.Exit(1)
+	}
+
+	chosenResolution := resolutionIdx[userOption]
+	return resolutionURLs[chosenResolution], chosenResolution, nil
+}
+
+func (v *Video) renderOutputPaths(resolution string) {
+	fmt.Println("Complete!")
+	fmt.Println("---------------------------------------------")
+	fmt.Printf("Video output:\n./%s/%s/%s.mp4\n\n", v.VideoUID, resolution, v.VideoUID)
+	fmt.Printf("Segments output:\n./%s/%s/segments/\n", v.VideoUID, resolution)
+	fmt.Printf("\nPlayback:\nffplay ./%s/%s/%s.mp4\n", v.VideoUID, resolution, v.VideoUID)
+	fmt.Println("---------------------------------------------")
 }
