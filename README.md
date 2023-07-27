@@ -51,3 +51,8 @@ Output [segments] will be in the directory
 ```
 ffplay <UID>/<RESOLUTION>/<UID>.mp4
 ```
+
+## Builds & Releases
+
+You can download the latest release in the sidebar of this repository.
+You can also run the latest builds for all operating systems by running: `make all`. The output binaries will exist at the root.
