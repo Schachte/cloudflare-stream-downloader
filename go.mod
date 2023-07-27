@@ -1,4 +1,4 @@
-module segmentdownloader
+module github.com/Schachte/cloudflare-stream-downloader
 
 go 1.19
 

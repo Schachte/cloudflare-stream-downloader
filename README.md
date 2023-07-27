@@ -9,6 +9,8 @@ Utility to download MP4 videos and individual [MPEG-TS](https://en.wikipedia.org
 
 ## Installation
 ```
+go install github.com/Schachte/cloudflare-stream-downloader@latest
+or
 go get github.com/Schachte/cloudflare-stream-downloader
 ```
 
