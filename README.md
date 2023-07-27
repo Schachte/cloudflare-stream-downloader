@@ -17,6 +17,8 @@ You can grab the HLS manifest from the Cloudflare Dash as shown in the image bel
 
 ## Example Output
 ```
+./stream-download 123456
+
 Listing all available resolutions for video UID: 123456
 
 0) 854x480
