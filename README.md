@@ -9,12 +9,14 @@
 ./stream-download <HLS_MANIFEST_URL>
 ```
 
+For building the binary, see section below on `Builds & Releases` or just download from the sidebar under releases for your OS.
+
 You can grab the HLS manifest from the Cloudflare Dash as shown in the image below:
 
 ![](./assets/dashboard.png)
 
 ## Example Output
-```sh
+```
 Listing all available resolutions for video UID: 123456
 
 0) 854x480
