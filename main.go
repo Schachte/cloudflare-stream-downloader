@@ -22,10 +22,12 @@ import (
 )
 
 func main() {
-	var manifestURL string
-	fmt.Print("Enter the HLS manifest URL from the stream dash:\n")
-	fmt.Scanln(&manifestURL)
+	if len(os.Args) < 2 {
+		fmt.Println("Please provide an HLS manifest URL as the first argument.")
+		return
+	}
 
+	manifestURL := os.Args[1]
 	chosenManifestURL, resolution, err := downloadAndParse(manifestURL)
 	if err != nil {
 		log.Fatalf("there was a problem downloading the manifest: %v", err)
@@ -79,6 +81,7 @@ func downloadSegmentsFromManifest(manifestURL, baseURL, UID, resolution string) 
 		return nil, err
 	}
 
+	writer := bufio.NewWriter(os.Stdout)
 	localSegmentPaths := []string{}
 	if listType == m3u8.MEDIA {
 		lastReportedProgress := 0
@@ -106,7 +109,9 @@ func downloadSegmentsFromManifest(manifestURL, baseURL, UID, resolution string) 
 			// user-friendly progress output
 			prog := int((float32(idx) / float32(totalSegments)) * 100)
 			if prog%5 == 0 && prog != lastReportedProgress {
-				fmt.Printf("%d%% complete\n", prog)
+				msg := fmt.Sprintf("%d%% complete\n", prog)
+				fmt.Fprint(writer, msg)
+				writer.Flush()
 				lastReportedProgress = prog
 			}
 		}
@@ -240,8 +245,7 @@ func concatenateTSFiles(tsFiles []string, outputDir, outputFilename string) erro
 	if err != nil {
 		return err
 	}
-	// defer os.Remove(tempFile.Name())
-	fmt.Println(tempFile.Name())
+	defer os.Remove(tempFile.Name())
 
 	currentDir, err := os.Getwd()
 	if err != nil {
