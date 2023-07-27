@@ -1,8 +1,11 @@
 # Cloudflare Stream Video Downloader
 
+Utility to download MP4 videos and individual [MPEG-TS](https://en.wikipedia.org/wiki/MPEG_transport_stream) segments for varying resolutions off a [Cloudflare Stream](https://developers.cloudflare.com/stream/) HLS manifest URL.
+
 ## Supports
-- Downloading videos of a user-selected resolution
-- Downloading individual segments of a user-selected resolution
+- ✅ Download video and segments
+- ✅ List available resolutions
+- ✅ Count number of segments
 
 ## Usage
 ```sh

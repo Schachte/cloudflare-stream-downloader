@@ -46,7 +46,7 @@ func main() {
 	manifestURL := os.Args[1]
 	for {
 		prompt := promptui.Select{
-			Label: "Cloudflare Stream Downloader:",
+			Label: "Cloudflare Stream Downloader",
 			Items: []string{OPTION_DOWNLOAD, OPTION_LIST_RESOLUTIONS, OPTION_COUNT_SEGMENTS, OPTION_EXIT},
 		}
 
