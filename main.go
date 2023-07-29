@@ -255,7 +255,7 @@ func initializeVideoDownloadProcess(manifestURL string) {
 	// merge potential audio and video files together with ffmpeg
 	if len(storedPaths) >= 2 {
 		fmt.Printf("🌱 audio and video are being merged...")
-		mergeMP4FilesInDir(storedPaths)
+		video.mergeMP4FilesInDir(storedPaths)
 	}
 	video.renderOutputPaths(chosenResolution)
 }
@@ -355,25 +355,19 @@ func (v *Video) downloadSegmentsFromManifest(manifestURL, resolution string, ski
 							}
 						}
 					}()
-
-					go func() {
-						wg.Wait()
-						close(errChan)
-					}()
-
-					if err := <-errChan; err != nil {
-						panic(err)
-					}
-
-					if err != nil {
-						return nil, err
-					}
 					bar.Add(1)
 				}
 			} else {
 				bar.Add(1)
 			}
 		}
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	if err := <-errChan; err != nil {
+		panic(err)
 	}
 	return localSegmentPaths, nil
 }
@@ -459,7 +453,7 @@ func getSegmentName(urlStr string) (string, error) {
 func (v *Video) concatenateTSFiles(filePaths []string, chosenResolution string, isAudio bool) (string, error) {
 	var outputFilename string
 	outputDir := fmt.Sprintf("%s/%s", v.VideoUID, chosenResolution)
-	outputFilename = fmt.Sprintf("%s.mp4", v.VideoUID)
+	outputFilename = fmt.Sprintf("%s_video.mp4", v.VideoUID)
 
 	if isAudio {
 		outputFilename = fmt.Sprintf("%s_audio.mp4", v.VideoUID)
@@ -548,20 +542,35 @@ func (v *Video) renderOutputPaths(resolution string) {
 	fmt.Println("Complete!")
 	fmt.Println("---------------------------------------------")
 	fmt.Printf("Video output:\n./%s/%s/\n\n", v.VideoUID, resolution)
+	fmt.Printf("ffplay %s/%s/%s.mp4\n\n", v.VideoUID, resolution, v.VideoUID)
 	fmt.Println("---------------------------------------------")
 }
 
-func mergeMP4FilesInDir(filePaths []string) error {
+func (v *Video) mergeMP4FilesInDir(filePaths []string) error {
 	if len(filePaths) != 2 {
 		return fmt.Errorf("expected 2 MP4 files, found %d", len(filePaths))
 	}
 
-	finalOutputPath := fmt.Sprintf("%s_audio_and_video.mp4", filePaths[1])
-	cmd := exec.Command("ffmpeg", "-i", filePaths[0], "-i", filePaths[1], "-c:v", "copy", "-c:a", "copy", finalOutputPath)
-	err := cmd.Run()
+	file, err := os.Open(filePaths[0])
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	dirPath := filepath.Dir(file.Name())
+	cmd := exec.Command("ffmpeg", "-i", filePaths[0], "-i", filePaths[1], "-c:v", "copy", "-c:a", "copy", fmt.Sprintf("%s/%s.mp4", dirPath, v.VideoUID))
+	err = cmd.Run()
 	if err != nil {
 		return err
 	}
 
+	err = os.RemoveAll(filePaths[0])
+	if err != nil {
+		return err
+	}
+	err = os.RemoveAll(filePaths[1])
+	if err != nil {
+		return err
+	}
 	return nil
 }
