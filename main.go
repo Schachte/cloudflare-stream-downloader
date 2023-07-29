@@ -542,7 +542,6 @@ func (v *Video) renderOutputPaths(resolution string) {
 	fmt.Println("Complete!")
 	fmt.Println("---------------------------------------------")
 	fmt.Printf("Video output:\n./%s/%s/\n\n", v.VideoUID, resolution)
-	fmt.Printf("ffplay %s/%s/%s.mp4\n\n", v.VideoUID, resolution, v.VideoUID)
 	fmt.Println("---------------------------------------------")
 }
 
