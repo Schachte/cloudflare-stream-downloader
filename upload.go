@@ -15,13 +15,14 @@ import (
 )
 
 var (
-	AccountID = os.Getenv("STREAM_ACCOUNT") // replace with your Cloudflare account ID
-	API_KEY   = os.Getenv("STREAM_API_KEY") // replace with your Cloudflare API key
+	AccountID         = os.Getenv("STREAM_ACCOUNT") // replace with your Cloudflare account ID
+	API_KEY           = os.Getenv("STREAM_API_KEY") // replace with your Cloudflare API key
+	ENDPOINT_OVERRIDE = os.Getenv("CLOUDFLARE_URL") // optional endpoint override for upload destination
 )
 
 var (
 	ChunkSize      = int64(5) * 1024 * 1024 // 5MB
-	CloudflareURL  = fmt.Sprintf("https://api.staging.cloudflare.com/client/v4/accounts/%s/stream", AccountID)
+	CloudflareURL  = fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/stream", AccountID)
 	CloudflareAuth = fmt.Sprintf("Bearer %s", API_KEY)
 )
 
@@ -68,9 +69,19 @@ func initUpload(filePath string) {
 }
 
 func createUpload(fileSize int64, encodedFilename string) (string, error) {
-	req, err := http.NewRequest("POST", CloudflareURL, nil)
-	if err != nil {
-		return "", err
+
+	var req *http.Request
+	var err error
+	if ENDPOINT_OVERRIDE != "" {
+		req, err = http.NewRequest("POST", ENDPOINT_OVERRIDE, nil)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		req, err = http.NewRequest("POST", CloudflareURL, nil)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	req.Header.Set("Content-Type", "application/offset+octet-stream")
