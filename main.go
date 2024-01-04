@@ -305,9 +305,9 @@ func (v *Video) downloadSegmentsFromManifest(manifestURL, resolution string, ski
 			}
 			var localSegmentPath string
 			if isAudio {
-				localSegmentPath = fmt.Sprintf("%s/%s/segments/audio_%s", v.VideoUID, resolution, segmentName)
+				localSegmentPath = fmt.Sprintf("%s/segments/audio_%s", resolution, segmentName)
 			} else {
-				localSegmentPath = fmt.Sprintf("%s/%s/segments/%s", v.VideoUID, resolution, segmentName)
+				localSegmentPath = fmt.Sprintf("%s/segments/video_%s", resolution, segmentName)
 			}
 			localSegmentPaths = append(localSegmentPaths, localSegmentPath)
 			if !skipDownload {
@@ -332,9 +332,9 @@ func (v *Video) downloadSegmentsFromManifest(manifestURL, resolution string, ski
 				}
 				var localSegmentPath string
 				if isAudio {
-					localSegmentPath = fmt.Sprintf("%s/%s/segments/audio_%s", v.VideoUID, resolution, segmentName)
+					localSegmentPath = fmt.Sprintf("%s/segments/audio_%s", resolution, segmentName)
 				} else {
-					localSegmentPath = fmt.Sprintf("%s/%s/segments/%s", v.VideoUID, resolution, segmentName)
+					localSegmentPath = fmt.Sprintf("%s/segments/video_%s", resolution, segmentName)
 				}
 				localSegmentPaths = append(localSegmentPaths, localSegmentPath)
 
@@ -375,7 +375,7 @@ func (v *Video) downloadSegmentsFromManifest(manifestURL, resolution string, ski
 // extractUIDAndPrefixURL will parse out the base URI for the customer as well
 // as the UID for the video
 func extractUIDAndPrefixURL(url string) (baseURL, uid string, err error) {
-	regex := regexp.MustCompile(`^(.+)/([a-f0-9]+)/manifest/video.m3u8$`)
+	regex := regexp.MustCompile(`^(.+)/(.+)/manifest/video.m3u8$`)
 	matches := regex.FindStringSubmatch(url)
 
 	if len(matches) == 3 {
@@ -452,11 +452,11 @@ func getSegmentName(urlStr string) (string, error) {
 // mp4 using ffmpeg
 func (v *Video) concatenateTSFiles(filePaths []string, chosenResolution string, isAudio bool) (string, error) {
 	var outputFilename string
-	outputDir := fmt.Sprintf("%s/%s", v.VideoUID, chosenResolution)
-	outputFilename = fmt.Sprintf("%s_video.mp4", v.VideoUID)
+	outputDir := chosenResolution
+	outputFilename = "video.mp4"
 
 	if isAudio {
-		outputFilename = fmt.Sprintf("%s_audio.mp4", v.VideoUID)
+		outputFilename = "audio.mp4"
 	}
 
 	currentDirectory, err := os.Getwd()
@@ -541,7 +541,7 @@ func (v *Video) printResolutionDownloadMenu() (string, string, error) {
 func (v *Video) renderOutputPaths(resolution string) {
 	fmt.Println("Complete!")
 	fmt.Println("---------------------------------------------")
-	fmt.Printf("Video output:\n./%s/%s/\n\n", v.VideoUID, resolution)
+	fmt.Printf("Video output:\n./%s/\n\n", resolution)
 	fmt.Println("---------------------------------------------")
 }
 
@@ -557,7 +557,7 @@ func (v *Video) mergeMP4FilesInDir(filePaths []string) error {
 	defer file.Close()
 
 	dirPath := filepath.Dir(file.Name())
-	cmd := exec.Command("ffmpeg", "-i", filePaths[0], "-i", filePaths[1], "-c:v", "copy", "-c:a", "copy", fmt.Sprintf("%s/%s.mp4", dirPath, v.VideoUID))
+	cmd := exec.Command("ffmpeg", "-i", filePaths[0], "-i", filePaths[1], "-c:v", "copy", "-c:a", "copy", fmt.Sprintf("%s/merged.mp4", dirPath))
 	err = cmd.Run()
 	if err != nil {
 		return err
