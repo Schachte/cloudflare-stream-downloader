@@ -523,7 +523,7 @@ func (v *Video) printResolutionDownloadMenu() (string, string, error) {
 		return "", "", err
 	}
 
-	userOption, err = strconv.Atoi(input[:len(input)-1])
+	userOption, err = strconv.Atoi(strings.TrimSpace(input[:len(input)-1]))
 	if err != nil {
 		fmt.Println("Error converting input to integer:", err)
 		return "", "", err
