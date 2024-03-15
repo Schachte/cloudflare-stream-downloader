@@ -39,7 +39,7 @@ You can grab the HLS manifest from the Cloudflare Dash as shown in the image bel
 
 ![](./assets/dashboard.png)
 
-In case you wish to download an embedded video on a different site and you don't have the access to the Cloudflare Dash, get to the frame's source code, find the url in the following format `https://customer-example-manifest.cloudflarestream.com/12345/iframe` and replace `iframe` with `manifest/video.m3u8`.
+In case you wish to download an embedded video on a different site and you don't have the access to the Cloudflare Dash, get to the frame's source code, find the poster url in the following format `https://customer-<CODE>.cloudflarestream.com/<UID>/thumbnails/thumbnail.jpg` and replace `thumbnail/thumbnanil.jpg` with `manifest/video.m3u8`. Example URL: `https://customer-f33zs165nr7gyfy4.cloudflarestream.com/6b9e68b07dfee8cc2d116e4c51d6a957/manifest/video.m3u8`
 
 ## Example Output
 ```
