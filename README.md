@@ -30,7 +30,9 @@ cloudflare-stream-downloader <HLS MANIFEST URL>
 
 ## Usage
 ```sh
-cloudflare-stream-downloader <HLS_MANIFEST_URL> 
+cloudflare-stream-downloader --manifestUrl <HLS_MANIFEST_URL> --output  <absolute path to output folder>
+
+#If an output path is not provided then it will be saved to the directory where the binary is executed
 ```
 
 For building the binary, see section below on `Builds & Releases` or [download latest release here.](https://github.com/Schachte/cloudflare-stream-downloader/releases)
@@ -43,7 +45,7 @@ In case you wish to download an embedded video on a different site and you don't
 
 ## Example Output
 ```
-cloudflare-stream-downloader https://.../manifest/video.m3u8
+cloudflare-stream-downloader --manifestUrl https://.../manifest/video.m3u8 --outputPath <absolute path to output folder>
 
 Use the arrow keys to navigate: ↓ ↑ → ←
 ? Cloudflare Stream Downloader::
