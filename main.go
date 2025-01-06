@@ -44,7 +44,20 @@ type Video struct {
 }
 
 func main() {
-	if len(os.Args) < 2 {
+	manifestURLPointer := flag.String("manifestUrl", "", "URL to download video. (-- needs to be prepended)")
+	absoluteOutputPathPointer := flag.String("outputPath", "", "path to output the audio and video segments along with the combined file. (-- needs to be prepended)")
+	flag.Parse()
+
+	manifestURL := *manifestURLPointer
+	absoluteOutputPath := *absoluteOutputPathPointer
+
+	if absoluteOutputPath != "" {
+		if !fileExists(absoluteOutputPath) {
+			log.Fatalf("Absolute path %s does not exist", absoluteOutputPath)
+		}
+	}
+
+	if manifestURL == "" {
 		fmt.Println("⚠️ WARNING: No HLS manifest was specified, so you will only be able to upload a video or add a manifest")
 	}
 
@@ -53,14 +66,9 @@ func main() {
 		OPTION_CHANGE_MANIFEST_URL,
 	}
 
-	var manifestURL string
-	if len(os.Args) >= 2 {
-		manifestURL = os.Args[1]
-	}
-
 	var prompt promptui.Select
 	for {
-		if manifestURL != "" && len(options) == 2 {
+		if manifestURL != "" {
 			options = append(options, []string{
 				OPTION_DOWNLOAD,
 				OPTION_OUTPUT_MANIFEST_URL,
@@ -82,7 +90,7 @@ func main() {
 
 		switch result {
 		case OPTION_DOWNLOAD:
-			initializeVideoDownloadProcess(manifestURL)
+			initializeVideoDownloadProcess(manifestURL, absoluteOutputPath)
 		case OPTION_OUTPUT_MANIFEST_URL:
 			outputManifestURL(manifestURL)
 		case OPTION_UPLOAD_FILEPATH:
@@ -97,7 +105,7 @@ func main() {
 		case OPTION_LIST_RESOLUTIONS:
 			listAvailableResolutions(manifestURL)
 		case OPTION_COUNT_SEGMENTS:
-			countTotalSegments(manifestURL)
+			countTotalSegments(manifestURL, absoluteOutputPath)
 		case OPTION_CHANGE_MANIFEST_URL:
 			fmt.Print("Enter new m3u8 manifest URL: ")
 			var userInput string
@@ -140,7 +148,7 @@ func outputManifestURL(manifestURL string) {
 }
 
 // countTotalSegments will output the number of segments on a particular manifest
-func countTotalSegments(manifestURL string) {
+func countTotalSegments(manifestURL string, absoluteOutputPath string) {
 	baseURL, UID, err := extractUIDAndPrefixURL(manifestURL)
 	if err != nil {
 		log.Fatalf("there was a problem parsing the base url: %v", err)
@@ -163,7 +171,7 @@ func countTotalSegments(manifestURL string) {
 		log.Fatalf("there was a problem selecting a download option: %v", err)
 	}
 
-	segmentPaths, err := video.downloadSegmentsFromManifest(chosenManifest, chosenResolution, true, false)
+	segmentPaths, err := video.downloadSegmentsFromManifest(chosenManifest, chosenResolution, true, false, absoluteOutputPath)
 	if err != nil {
 		log.Fatalf("there was a problem downloading the segments: %v", err)
 	}
@@ -201,7 +209,7 @@ func listAvailableResolutions(manifestURL string) {
 
 // initializeVideoDownloadProcess will invoke the download job to pull
 // all segments and final mp4 video onto disk
-func initializeVideoDownloadProcess(manifestURL string) {
+func initializeVideoDownloadProcess(manifestURL string, absoluteOutputPath string) {
 	baseURL, UID, err := extractUIDAndPrefixURL(manifestURL)
 	if err != nil {
 		log.Fatalf("there was a problem parsing the base url: %v", err)
@@ -224,11 +232,11 @@ func initializeVideoDownloadProcess(manifestURL string) {
 		log.Fatalf("there was a problem selecting a download option: %v", err)
 	}
 
-	storedPaths := []string{}
+	var storedPaths []string
 	for _, media := range video.MasterPlaylist.Variants[0].Alternatives {
 		if media.Type == "AUDIO" {
 			manifestForResolution := fmt.Sprintf("%s/%s/manifest/%s", video.BaseURL, video.VideoUID, media.URI)
-			segmentPaths, err := video.downloadSegmentsFromManifest(manifestForResolution, chosenResolution, false, true)
+			segmentPaths, err := video.downloadSegmentsFromManifest(manifestForResolution, chosenResolution, false, true, absoluteOutputPath)
 			if err != nil {
 				log.Fatalf("there was a problem downloading the segments: %v", err)
 			}
@@ -241,7 +249,7 @@ func initializeVideoDownloadProcess(manifestURL string) {
 		}
 	}
 
-	segmentPaths, err := video.downloadSegmentsFromManifest(chosenManifest, chosenResolution, false, false)
+	segmentPaths, err := video.downloadSegmentsFromManifest(chosenManifest, chosenResolution, false, false, absoluteOutputPath)
 	if err != nil {
 		log.Fatalf("there was a problem downloading the segments: %v", err)
 	}
@@ -262,7 +270,7 @@ func initializeVideoDownloadProcess(manifestURL string) {
 
 // downloadSegmentsFromManifest will download a complete video and individual segments
 // from a particular manifest and returns the list of relative segment paths
-func (v *Video) downloadSegmentsFromManifest(manifestURL, resolution string, skipDownload, isAudio bool) ([]string, error) {
+func (v *Video) downloadSegmentsFromManifest(manifestURL, resolution string, skipDownload, isAudio bool, absoluteOutputPath string) ([]string, error) {
 	if isAudio {
 		fmt.Printf("🌱 Beginning audio download for [%s]\n", resolution)
 	} else {
@@ -305,9 +313,9 @@ func (v *Video) downloadSegmentsFromManifest(manifestURL, resolution string, ski
 			}
 			var localSegmentPath string
 			if isAudio {
-				localSegmentPath = fmt.Sprintf("%s/segments/audio_%s", resolution, segmentName)
+				localSegmentPath = fmt.Sprintf("%s/%s/segments/audio_%s", absoluteOutputPath, resolution, segmentName)
 			} else {
-				localSegmentPath = fmt.Sprintf("%s/segments/video_%s", resolution, segmentName)
+				localSegmentPath = fmt.Sprintf("%s/%s/segments/video_%s", absoluteOutputPath, resolution, segmentName)
 			}
 			localSegmentPaths = append(localSegmentPaths, localSegmentPath)
 			if !skipDownload {
@@ -572,4 +580,9 @@ func (v *Video) mergeMP4FilesInDir(filePaths []string) error {
 		return err
 	}
 	return nil
+}
+
+func fileExists(filePath string) bool {
+	_, err := os.Stat(filePath)
+	return !errors.Is(err, os.ErrNotExist)
 }
