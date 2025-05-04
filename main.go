@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"flag"
 	"io"
 	"io/ioutil"
 	"log"
@@ -491,11 +492,7 @@ func (v *Video) concatenateTSFiles(filePaths []string, chosenResolution string, 
 			log.Fatal(err)
 		}
 
-		cmd := exec.Command("cat")
-		cmd.Stdin = inputFile
-		cmd.Stdout = outputFile
-
-		err = cmd.Run()
+		_, err = io.Copy(outputFile, inputFile)
 		if err != nil {
 			log.Fatal(err)
 		}
