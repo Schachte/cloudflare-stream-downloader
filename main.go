@@ -3,12 +3,11 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
-	"flag"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -17,9 +16,11 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/grafov/m3u8"
 	"github.com/manifoldco/promptui"
@@ -45,9 +46,35 @@ type Video struct {
 	MasterPlaylist m3u8.MasterPlaylist
 }
 
+// Segment represents a single audio or video segment to download
+type Segment struct {
+	URL       string
+	LocalPath string
+	Duration  float64
+	IsAudio   bool
+	Index     int
+}
+
+// DownloadConfig holds configuration for the interleaved downloader
+type DownloadConfig struct {
+	Concurrency     int
+	RealtimeMode    bool
+	RealtimeFactor  float64
+	WorkDir         string
+	OutputFile      string
+	Resolution      string
+}
+
 func main() {
 	manifestURLPointer := flag.String("manifestUrl", "", "URL to download video. (-- needs to be prepended)")
 	absoluteOutputPathPointer := flag.String("outputPath", "", "path to output the audio and video segments along with the combined file. (-- needs to be prepended)")
+	downloadFlag := flag.Bool("download", false, "skip UI and immediately download the best resolution")
+	listFlag := flag.Bool("list", false, "list available resolutions and exit")
+	resolutionFlag := flag.String("resolution", "", "specific resolution to download (e.g. 1920x1080)")
+	concurrencyFlag := flag.Int("concurrency", 5, "number of concurrent segment downloads")
+	realtimeFlag := flag.Float64("realtime", 0, "simulate real-time playback speed (e.g., 1.0 for real-time, 0.9 for 90%)")
+	workDirFlag := flag.String("workDir", "", "working directory for temp files (defaults to OS temp dir)")
+	outputFlag := flag.String("output", "", "output file path (defaults to ./<resolution>/output.mp4)")
 	flag.Parse()
 
 	manifestURL := *manifestURLPointer
@@ -57,6 +84,38 @@ func main() {
 		if !fileExists(absoluteOutputPath) {
 			log.Fatalf("Absolute path %s does not exist", absoluteOutputPath)
 		}
+	}
+
+	if *listFlag {
+		if manifestURL == "" {
+			log.Fatal("--list requires --manifestUrl to be set")
+		}
+		listResolutionsNonInteractive(manifestURL)
+		return
+	}
+
+	if *downloadFlag {
+		if manifestURL == "" {
+			log.Fatal("--download requires --manifestUrl to be set")
+		}
+		workDir := *workDirFlag
+		if workDir == "" {
+			var err error
+			workDir, err = os.MkdirTemp("", "stream-download-*")
+			if err != nil {
+				log.Fatalf("failed to create temp directory: %v", err)
+			}
+		}
+		config := DownloadConfig{
+			Concurrency:    *concurrencyFlag,
+			RealtimeMode:   *realtimeFlag > 0,
+			RealtimeFactor: *realtimeFlag,
+			WorkDir:        workDir,
+			OutputFile:     *outputFlag,
+			Resolution:     *resolutionFlag,
+		}
+		downloadInterleaved(manifestURL, config)
+		return
 	}
 
 	if manifestURL == "" {
@@ -209,6 +268,29 @@ func listAvailableResolutions(manifestURL string) {
 	}
 }
 
+// listResolutionsNonInteractive prints available resolutions one per line
+func listResolutionsNonInteractive(manifestURL string) {
+	baseURL, UID, err := extractUIDAndPrefixURL(manifestURL)
+	if err != nil {
+		log.Fatalf("there was a problem parsing the base url: %v", err)
+	}
+
+	video := Video{
+		MasterManifestURL: manifestURL,
+		BaseURL:           baseURL,
+		VideoUID:          UID,
+	}
+
+	masterPlaylist, err := video.retrieveMasterPlaylist(manifestURL)
+	if err != nil {
+		log.Fatalf("there was a problem retrieving master playlist: %v", err)
+	}
+
+	for _, variant := range masterPlaylist.Variants {
+		fmt.Println(variant.Resolution)
+	}
+}
+
 // initializeVideoDownloadProcess will invoke the download job to pull
 // all segments and final mp4 video onto disk
 func initializeVideoDownloadProcess(manifestURL string, absoluteOutputPath string) {
@@ -270,6 +352,498 @@ func initializeVideoDownloadProcess(manifestURL string, absoluteOutputPath strin
 	video.renderOutputPaths(chosenResolution)
 }
 
+// initializeVideoDownloadProcessNonInteractive downloads without prompts, selecting best or specified resolution
+func initializeVideoDownloadProcessNonInteractive(manifestURL string, absoluteOutputPath string, targetResolution string) {
+	baseURL, UID, err := extractUIDAndPrefixURL(manifestURL)
+	if err != nil {
+		log.Fatalf("there was a problem parsing the base url: %v", err)
+	}
+
+	video := Video{
+		MasterManifestURL: manifestURL,
+		BaseURL:           baseURL,
+		VideoUID:          UID,
+	}
+
+	masterPlaylist, err := video.retrieveMasterPlaylist(manifestURL)
+	if err != nil {
+		log.Fatalf("there was a problem retrieving master playlist: %v", err)
+	}
+	video.MasterPlaylist = *masterPlaylist
+
+	// Select resolution: use specified, or pick the best (last variant typically has highest quality)
+	var chosenManifest, chosenResolution string
+	if targetResolution != "" {
+		found := false
+		for _, variant := range video.MasterPlaylist.Variants {
+			if variant.Resolution == targetResolution {
+				chosenResolution = variant.Resolution
+				chosenManifest = fmt.Sprintf("%s/%s/manifest/%s", video.BaseURL, video.VideoUID, variant.URI)
+				found = true
+				break
+			}
+		}
+		if !found {
+			log.Fatalf("resolution %s not found. Available resolutions:", targetResolution)
+		}
+	} else {
+		// Pick the best resolution (last one in the list, typically highest bandwidth)
+		bestVariant := video.MasterPlaylist.Variants[len(video.MasterPlaylist.Variants)-1]
+		chosenResolution = bestVariant.Resolution
+		chosenManifest = fmt.Sprintf("%s/%s/manifest/%s", video.BaseURL, video.VideoUID, bestVariant.URI)
+	}
+
+	fmt.Printf("📺 Selected resolution: %s\n", chosenResolution)
+
+	var storedPaths []string
+	for _, media := range video.MasterPlaylist.Variants[0].Alternatives {
+		if media.Type == "AUDIO" {
+			manifestForResolution := fmt.Sprintf("%s/%s/manifest/%s", video.BaseURL, video.VideoUID, media.URI)
+			segmentPaths, err := video.downloadSegmentsFromManifest(manifestForResolution, chosenResolution, false, true, absoluteOutputPath)
+			if err != nil {
+				log.Fatalf("there was a problem downloading the segments: %v", err)
+			}
+
+			storedPath, err := video.concatenateTSFiles(segmentPaths, chosenResolution, true)
+			if err != nil {
+				log.Fatalf("there was a problem concatenating the segments: %v", err)
+			}
+			storedPaths = append(storedPaths, storedPath)
+		}
+	}
+
+	segmentPaths, err := video.downloadSegmentsFromManifest(chosenManifest, chosenResolution, false, false, absoluteOutputPath)
+	if err != nil {
+		log.Fatalf("there was a problem downloading the segments: %v", err)
+	}
+
+	storedPath, err := video.concatenateTSFiles(segmentPaths, chosenResolution, false)
+	if err != nil {
+		log.Fatalf("there was a problem concatenating the segments: %v", err)
+	}
+	storedPaths = append(storedPaths, storedPath)
+
+	if len(storedPaths) >= 2 {
+		fmt.Printf("🌱 audio and video are being merged...")
+		video.mergeMP4FilesInDir(storedPaths)
+	}
+	video.renderOutputPaths(chosenResolution)
+}
+
+// downloadInterleaved downloads audio and video segments interleaved by percentage progress
+func downloadInterleaved(manifestURL string, config DownloadConfig) {
+	baseURL, UID, err := extractUIDAndPrefixURL(manifestURL)
+	if err != nil {
+		log.Fatalf("there was a problem parsing the base url: %v", err)
+	}
+
+	video := Video{
+		MasterManifestURL: manifestURL,
+		BaseURL:           baseURL,
+		VideoUID:          UID,
+	}
+
+	masterPlaylist, err := video.retrieveMasterPlaylist(manifestURL)
+	if err != nil {
+		log.Fatalf("there was a problem retrieving master playlist: %v", err)
+	}
+	video.MasterPlaylist = *masterPlaylist
+
+	// Select resolution
+	var chosenManifest, chosenResolution string
+	if config.Resolution != "" {
+		found := false
+		for _, variant := range video.MasterPlaylist.Variants {
+			if variant.Resolution == config.Resolution {
+				chosenResolution = variant.Resolution
+				chosenManifest = fmt.Sprintf("%s/%s/manifest/%s", video.BaseURL, video.VideoUID, variant.URI)
+				found = true
+				break
+			}
+		}
+		if !found {
+			log.Fatalf("resolution %s not found", config.Resolution)
+		}
+	} else {
+		bestVariant := video.MasterPlaylist.Variants[len(video.MasterPlaylist.Variants)-1]
+		chosenResolution = bestVariant.Resolution
+		chosenManifest = fmt.Sprintf("%s/%s/manifest/%s", video.BaseURL, video.VideoUID, bestVariant.URI)
+	}
+
+	fmt.Printf("📺 Selected resolution: %s\n", chosenResolution)
+
+	// Get audio manifest URL
+	var audioManifestURL string
+	for _, media := range video.MasterPlaylist.Variants[0].Alternatives {
+		if media.Type == "AUDIO" {
+			audioManifestURL = fmt.Sprintf("%s/%s/manifest/%s", video.BaseURL, video.VideoUID, media.URI)
+			break
+		}
+	}
+
+	// Parse both manifests to get segment lists
+	audioSegments, audioDuration, err := parseManifestSegments(audioManifestURL, video.BaseURL, chosenResolution, config.WorkDir, true)
+	if err != nil {
+		log.Fatalf("failed to parse audio manifest: %v", err)
+	}
+
+	videoSegments, videoDuration, err := parseManifestSegments(chosenManifest, video.BaseURL, chosenResolution, config.WorkDir, false)
+	if err != nil {
+		log.Fatalf("failed to parse video manifest: %v", err)
+	}
+
+	totalDuration := audioDuration
+	if videoDuration > totalDuration {
+		totalDuration = videoDuration
+	}
+
+	fmt.Printf("🎬 Video duration: %.1fs | Audio segments: %d | Video segments: %d\n",
+		totalDuration, len(audioSegments), len(videoSegments))
+
+	if config.RealtimeMode {
+		fmt.Printf("⏱️  Real-time mode: %.0f%% speed (download will take ~%.1fs)\n",
+			config.RealtimeFactor*100, totalDuration/config.RealtimeFactor)
+	}
+
+	// Build interleaved download queue based on percentage progress
+	queue := buildInterleavedQueue(audioSegments, videoSegments)
+
+	// Download with progress bar
+	err = downloadQueue(queue, config, totalDuration)
+	if err != nil {
+		fmt.Printf("❌ Download failed: %v\n", err)
+		fmt.Println("---------------------------------------------")
+		fmt.Printf("Working files preserved at: %s\n", config.WorkDir)
+		fmt.Println("---------------------------------------------")
+		os.Exit(1)
+	}
+
+	// Merge using ffmpeg concat demuxer
+	outputFile := config.OutputFile
+	if outputFile == "" {
+		outputFile = filepath.Join(chosenResolution, "output.mp4")
+	}
+	err = mergeWithFFmpegConcat(audioSegments, videoSegments, outputFile, config.WorkDir, totalDuration)
+	if err != nil {
+		fmt.Printf("❌ Merge failed: %v\n", err)
+		fmt.Println("---------------------------------------------")
+		fmt.Printf("Working files preserved at: %s\n", config.WorkDir)
+		fmt.Println("---------------------------------------------")
+		os.Exit(1)
+	}
+
+	// Clean up working directory
+	fmt.Println("🧹 Cleaning up working directory...")
+	if err := os.RemoveAll(config.WorkDir); err != nil {
+		fmt.Printf("⚠️  Warning: failed to clean up working directory: %v\n", err)
+	}
+
+	fmt.Println("✅ Complete!")
+	fmt.Println("---------------------------------------------")
+	fmt.Printf("Video output: %s\n", outputFile)
+	fmt.Println("---------------------------------------------")
+}
+
+// parseManifestSegments fetches a manifest and returns the segment list with durations
+func parseManifestSegments(manifestURL, baseURL, resolution, outputPath string, isAudio bool) ([]Segment, float64, error) {
+	resp, err := http.Get(manifestURL)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	dataBuf := bytes.NewBuffer(body)
+	playlist, listType, err := m3u8.Decode(*dataBuf, false)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if listType != m3u8.MEDIA {
+		return nil, 0, fmt.Errorf("expected media playlist, got master")
+	}
+
+	mediaPlaylist := playlist.(*m3u8.MediaPlaylist)
+	var segments []Segment
+	var totalDuration float64
+	index := 0
+
+	// Handle init segment if present
+	if mediaPlaylist.Map != nil {
+		segmentURL := mediaPlaylist.Map.URI
+		for strings.HasPrefix(segmentURL, "../") {
+			segmentURL = strings.TrimPrefix(segmentURL, "../")
+		}
+		completeURL := fmt.Sprintf("%s/%s", baseURL, segmentURL)
+		segmentName, err := getSegmentName(completeURL)
+		if err == nil {
+			prefix := "video_"
+			if isAudio {
+				prefix = "audio_"
+			}
+			localPath := filepath.Join(outputPath, resolution, "segments", prefix+segmentName)
+			segments = append(segments, Segment{
+				URL:       completeURL,
+				LocalPath: localPath,
+				Duration:  0,
+				IsAudio:   isAudio,
+				Index:     index,
+			})
+			index++
+		}
+	}
+
+	for _, seg := range mediaPlaylist.Segments {
+		if seg == nil {
+			continue
+		}
+		segmentURL := seg.URI
+		for strings.HasPrefix(segmentURL, "../") {
+			segmentURL = strings.TrimPrefix(segmentURL, "../")
+		}
+		completeURL := fmt.Sprintf("%s/%s", baseURL, segmentURL)
+		segmentName, err := getSegmentName(completeURL)
+		if err != nil {
+			continue
+		}
+		prefix := "video_"
+		if isAudio {
+			prefix = "audio_"
+		}
+		localPath := filepath.Join(outputPath, resolution, "segments", prefix+segmentName)
+		segments = append(segments, Segment{
+			URL:       completeURL,
+			LocalPath: localPath,
+			Duration:  seg.Duration,
+			IsAudio:   isAudio,
+			Index:     index,
+		})
+		totalDuration += seg.Duration
+		index++
+	}
+
+	return segments, totalDuration, nil
+}
+
+// buildInterleavedQueue creates a download queue interleaved by percentage progress
+func buildInterleavedQueue(audioSegments, videoSegments []Segment) []Segment {
+	type indexedSegment struct {
+		segment    Segment
+		percentage float64
+	}
+
+	var indexed []indexedSegment
+	audioCount := len(audioSegments)
+	videoCount := len(videoSegments)
+
+	for i, seg := range audioSegments {
+		pct := float64(i) / float64(audioCount)
+		indexed = append(indexed, indexedSegment{seg, pct})
+	}
+	for i, seg := range videoSegments {
+		pct := float64(i) / float64(videoCount)
+		indexed = append(indexed, indexedSegment{seg, pct})
+	}
+
+	// Sort by percentage, with audio before video at same percentage
+	sort.SliceStable(indexed, func(i, j int) bool {
+		if indexed[i].percentage != indexed[j].percentage {
+			return indexed[i].percentage < indexed[j].percentage
+		}
+		return indexed[i].segment.IsAudio && !indexed[j].segment.IsAudio
+	})
+
+	queue := make([]Segment, len(indexed))
+	for i, item := range indexed {
+		queue[i] = item.segment
+	}
+	return queue
+}
+
+// downloadQueue downloads segments with concurrency control and optional real-time pacing
+func downloadQueue(queue []Segment, config DownloadConfig, totalDuration float64) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sem := make(chan struct{}, config.Concurrency)
+	var wg sync.WaitGroup
+	errChan := make(chan error, 1)
+
+	totalSegments := len(queue)
+	bar := progressbar.NewOptions(totalSegments,
+		progressbar.OptionSetDescription("Downloading"),
+		progressbar.OptionShowCount(),
+		progressbar.OptionSetWidth(40),
+	)
+
+	var audioDownloaded, videoDownloaded int
+	var mu sync.Mutex
+	startTime := time.Now()
+	var cumulativeDuration float64
+
+downloadLoop:
+	for _, seg := range queue {
+		select {
+		case <-ctx.Done():
+			break downloadLoop
+		default:
+		}
+
+		seg := seg
+		cumulativeDuration += seg.Duration
+
+		// Real-time pacing: wait if we're ahead of schedule
+		if config.RealtimeMode && cumulativeDuration > 0 {
+			targetTime := time.Duration(cumulativeDuration/config.RealtimeFactor) * time.Second
+			elapsed := time.Since(startTime)
+			if elapsed < targetTime {
+				time.Sleep(targetTime - elapsed)
+			}
+		}
+
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer func() {
+				<-sem
+				wg.Done()
+			}()
+
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			err := downloadFile(seg.URL, seg.LocalPath)
+			if err != nil {
+				select {
+				case errChan <- fmt.Errorf("failed to download %s: %w", seg.URL, err):
+					cancel()
+				default:
+				}
+				return
+			}
+
+			mu.Lock()
+			if seg.IsAudio {
+				audioDownloaded++
+			} else {
+				videoDownloaded++
+			}
+			bar.Describe(fmt.Sprintf("A:%d V:%d", audioDownloaded, videoDownloaded))
+			bar.Add(1)
+			mu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	if err := <-errChan; err != nil {
+		return err
+	}
+
+	fmt.Println()
+	return nil
+}
+
+// mergeWithFFmpegConcat uses ffmpeg concat demuxer to merge segments directly
+func mergeWithFFmpegConcat(audioSegments, videoSegments []Segment, outputFile, workDir string, totalDuration float64) error {
+	fmt.Println("🔧 Merging with ffmpeg...")
+
+	outputDir := filepath.Dir(outputFile)
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return err
+	}
+
+	// Create concat file for audio
+	audioListFile := filepath.Join(workDir, "audio_list.txt")
+	audioList, err := os.Create(audioListFile)
+	if err != nil {
+		return err
+	}
+	for _, seg := range audioSegments {
+		absPath, _ := filepath.Abs(seg.LocalPath)
+		fmt.Fprintf(audioList, "file '%s'\n", absPath)
+	}
+	audioList.Close()
+
+	// Create concat file for video
+	videoListFile := filepath.Join(workDir, "video_list.txt")
+	videoList, err := os.Create(videoListFile)
+	if err != nil {
+		return err
+	}
+	for _, seg := range videoSegments {
+		absPath, _ := filepath.Abs(seg.LocalPath)
+		fmt.Fprintf(videoList, "file '%s'\n", absPath)
+	}
+	videoList.Close()
+
+	// Run ffmpeg to concat and merge in one step with progress output
+	cmd := exec.Command("ffmpeg", "-y",
+		"-f", "concat", "-safe", "0", "-i", audioListFile,
+		"-f", "concat", "-safe", "0", "-i", videoListFile,
+		"-c:v", "copy", "-c:a", "copy",
+		"-map", "1:v:0", "-map", "0:a:0",
+		"-progress", "pipe:1",
+		outputFile)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	cmd.Stderr = nil
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	// Parse progress output
+	bar := progressbar.NewOptions(100,
+		progressbar.OptionSetDescription("Merging"),
+		progressbar.OptionSetWidth(40),
+		progressbar.OptionShowBytes(false),
+		progressbar.OptionSetPredictTime(false),
+		progressbar.OptionThrottle(100*time.Millisecond),
+		progressbar.OptionClearOnFinish(),
+	)
+
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "out_time_ms=") {
+			timeStr := strings.TrimPrefix(line, "out_time_ms=")
+			if timeUs, err := strconv.ParseInt(timeStr, 10, 64); err == nil {
+				currentSec := float64(timeUs) / 1000000.0
+				percent := int((currentSec / totalDuration) * 100)
+				if percent > 100 {
+					percent = 100
+				}
+				bar.Set(percent)
+			}
+		}
+	}
+
+	err = cmd.Wait()
+	bar.Finish()
+
+	if err != nil {
+		return fmt.Errorf("ffmpeg failed: %v", err)
+	}
+
+	// Clean up list files
+	os.Remove(audioListFile)
+	os.Remove(videoListFile)
+
+	return nil
+}
+
 // downloadSegmentsFromManifest will download a complete video and individual segments
 // from a particular manifest and returns the list of relative segment paths
 func (v *Video) downloadSegmentsFromManifest(manifestURL, resolution string, skipDownload, isAudio bool, absoluteOutputPath string) ([]string, error) {
@@ -284,7 +858,7 @@ func (v *Video) downloadSegmentsFromManifest(manifestURL, resolution string, ski
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -385,7 +959,7 @@ func (v *Video) downloadSegmentsFromManifest(manifestURL, resolution string, ski
 // extractUIDAndPrefixURL will parse out the base URI for the customer as well
 // as the UID for the video
 func extractUIDAndPrefixURL(url string) (baseURL, uid string, err error) {
-	regex := regexp.MustCompile(`^(.+)/(.+)/manifest/video.m3u8$`)
+	regex := regexp.MustCompile(`^(.+)/(.+)/manifest/.+\.m3u8$`)
 	matches := regex.FindStringSubmatch(url)
 
 	if len(matches) == 3 {
@@ -404,7 +978,7 @@ func (v *Video) retrieveMasterPlaylist(url string) (*m3u8.MasterPlaylist, error)
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
